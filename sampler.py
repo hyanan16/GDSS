@@ -12,7 +12,7 @@ from utils.plot import save_graph_list, plot_graphs_list
 from evaluation.stats import eval_graph_list
 from utils.mol_utils import gen_mol, mols_to_smiles, load_smiles, canonicalize_smiles, mols_to_nx
 from moses.metrics.metrics import get_all_metrics
-
+from rdkit.Chem.Scaffolds import MurckoScaffold
 
 # -------- Sampler for generic graph generation tasks --------
 class Sampler(object):
@@ -149,7 +149,11 @@ class Sampler_mol(object):
                 f.write(f'{smiles}\n')
 
         # -------- Evaluation --------
-        scores = get_all_metrics(gen=gen_smiles, k=len(gen_smiles), device=self.device[0], n_jobs=8, test=test_smiles, train=train_smiles)
+        scaffolds = [MurckoScaffold.GetScaffoldForMol(mol) for mol in gen_mols]
+        scaffold_list = mols_to_smiles(scaffolds)
+        scaffold_list_f = [smi for smi in scaffold_list if len(smi)]
+        scores = get_all_metrics(gen=gen_smiles, k=len(gen_smiles), device=self.device[0], n_jobs=8, test=test_smiles, train=train_smiles, test_scaffolds=scaffold_list_f)
+        # scores = get_all_metrics(gen=gen_smiles, k=len(gen_smiles), device=self.device[0], n_jobs=8, test=test_smiles, train=train_smiles)
         scores_nspdk = eval_graph_list(self.test_graph_list, mols_to_nx(gen_mols), methods=['nspdk'])['nspdk']
 
         logger.log(f'Number of molecules: {num_mols}')
