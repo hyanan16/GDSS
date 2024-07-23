@@ -14,12 +14,17 @@ from utils.mol_utils import gen_mol, mols_to_smiles, load_smiles, canonicalize_s
 from moses.metrics.metrics import get_all_metrics
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.Chem import QED
+from rdkit.Contrib.SA_Score import sascorer
 
 # -------- Sampler for molecule generation tasks --------
 class decode_Sampler_mol(object):
-    def __init__(self, config):
+    def __init__(self, config, rewardf):
         self.config = config
         self.device = load_device()
+        if rewardf == 'SA':
+            self.rewardf = self.SA_reward
+        else:
+            self.rewardf = self.qed_reward
 
     def sample(self, strat='controlled', sample_M=20):
         # -------- Load checkpoint --------
@@ -57,7 +62,7 @@ class decode_Sampler_mol(object):
 
         self.init_flags = init_flags(self.train_graph_list, self.configt, 100).to(self.device[0])
         if strat=='controlled':
-            x, adj, _ = self.sampling_fn(self.model_x, self.model_adj, self.init_flags, self.qed_reward, sample_M=sample_M)
+            x, adj, _ = self.sampling_fn(self.model_x, self.model_adj, self.init_flags, self.rewardf, sample_M=sample_M)
             return x, adj
         else:
             x, adj, x_mid, adj_mid, _ = self.sampling_fn(self.model_x, self.model_adj, self.init_flags)
@@ -77,7 +82,7 @@ class decode_Sampler_mol(object):
             #     pred = self.reward_model(self.transform_samples_saluki(batch_samples).float()).detach().squeeze(2)
             # else:
             #     pred = self.reward_model(onehot_samples.float().transpose(1, 2)).detach()[:, 0]
-            qeds = self.qed_reward(x, adj)
+            qeds = self.rewardf(x, adj)
             reward_model_preds.extend(qeds)
 
         self.logger.log("Value-weighted sampling done.")
@@ -86,7 +91,7 @@ class decode_Sampler_mol(object):
         all_preds = []
         for i in range(gen_batch_num * sample_M):
             x, adj, x_mid, adj_mid = self.sample(strat='ori')
-            qeds = self.qed_reward(x, adj)
+            qeds = self.rewardf(x, adj)
             if i < gen_batch_num:
                 baseline_preds.extend(qeds)
             all_preds.extend(qeds)
@@ -98,6 +103,21 @@ class decode_Sampler_mol(object):
         # Get the top k values
         top_k_values, _ = torch.topk(all_values, k)
         return torch.cat(reward_model_preds), top_k_values, torch.cat(baseline_preds)
+
+    def SA_reward(self, x, adj):
+        samples_int = quantize_mol(adj)
+
+        samples_int = samples_int - 1
+        samples_int[samples_int == -1] = 3      # 0, 1, 2, 3 (no, S, D, T) -> 3, 0, 1, 2
+
+        adj = torch.nn.functional.one_hot(torch.tensor(samples_int), num_classes=4).permute(0, 3, 1, 2)
+        x = torch.where(x > 0.5, 1, 0)
+        x = torch.concat([x, 1 - x.sum(dim=-1, keepdim=True)], dim=-1)      # 32, 9, 4 -> 32, 9, 5
+
+        gen_mols, num_mols_wo_correction = gen_mol(x, adj, self.configt.data.data)
+        # num_mols = len(gen_mols)
+        scores = [sascorer.calculateScore(mol) for mol in gen_mols]
+        return torch.FloatTensor(scores).unsqueeze(1)
 
     def qed_reward(self, x, adj):
         samples_int = quantize_mol(adj)

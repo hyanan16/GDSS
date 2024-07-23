@@ -40,7 +40,7 @@ def main(work_type_args):
             name='decode_rewardF'
         )
         if config.data.data in ['QM9', 'ZINC250k']:
-            sampler = decode_Sampler_mol(config)
+            sampler = decode_Sampler_mol(config, args.reward_name)
         else:
             sampler = Sampler(config)
         reward_model_preds, selected_baseline_preds, baseline_preds = sampler.controlled_decode(sample_M=args.sample_M)
