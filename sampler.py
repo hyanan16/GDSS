@@ -126,7 +126,7 @@ class Sampler_mol(object):
             self.test_graph_list = pickle.load(f)                                   # for NSPDK MMD
 
         self.init_flags = init_flags(self.train_graph_list, self.configt, 10000).to(self.device[0])
-        x, adj, _ = self.sampling_fn(self.model_x, self.model_adj, self.init_flags)
+        x, adj, x_m, adj_m, _ = self.sampling_fn(self.model_x, self.model_adj, self.init_flags)
         
         samples_int = quantize_mol(adj)
 
@@ -154,11 +154,12 @@ class Sampler_mol(object):
         scaffold_list_f = [smi for smi in scaffold_list if len(smi)]
         scores = get_all_metrics(gen=gen_smiles, k=len(gen_smiles), device=self.device[0], n_jobs=8, test=test_smiles, train=train_smiles, test_scaffolds=scaffold_list_f)
         # scores = get_all_metrics(gen=gen_smiles, k=len(gen_smiles), device=self.device[0], n_jobs=8, test=test_smiles, train=train_smiles)
-        scores_nspdk = eval_graph_list(self.test_graph_list, mols_to_nx(gen_mols), methods=['nspdk'])['nspdk']
+        # scores_nspdk = eval_graph_list(self.test_graph_list, mols_to_nx(gen_mols), methods=['nspdk'])['nspdk']
 
         logger.log(f'Number of molecules: {num_mols}')
         logger.log(f'validity w/o correction: {num_mols_wo_correction / num_mols}')
-        for metric in ['valid', f'unique@{len(gen_smiles)}', 'FCD/Test', 'Novelty']:
+        # for metric in ['valid', f'unique@{len(gen_smiles)}', 'FCD/Test', 'Novelty']:
+        for metric in scores.keys():
             logger.log(f'{metric}: {scores[metric]}')
-        logger.log(f'NSPDK MMD: {scores_nspdk}')
+        # logger.log(f'NSPDK MMD: {scores_nspdk}')
         logger.log('='*100)

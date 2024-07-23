@@ -153,7 +153,7 @@ class LangevinCorrector(Corrector):
 def get_pc_sampler(sde_x, sde_adj, shape_x, shape_adj, predictor='Euler', corrector='None', 
                    snr=0.1, scale_eps=1.0, n_steps=1, 
                    probability_flow=False, continuous=False,
-                   denoise=True, eps=1e-3, device='cuda'):
+                   denoise=True, eps=1e-3, device='cuda', strat='controlled'):
 
   def pc_sampler(model_x, model_adj, init_flags):
 
@@ -179,6 +179,8 @@ def get_pc_sampler(sde_x, sde_adj, shape_x, shape_adj, predictor='Euler', correc
       diff_steps = sde_adj.N
       timesteps = torch.linspace(sde_adj.T, eps, diff_steps, device=device)
 
+      x_mid = []
+      adj_mid = []
       # -------- Reverse diffusion process --------
       for i in trange(0, (diff_steps), desc = '[Sampling]', position = 1, leave=False):
         t = timesteps[i]
@@ -191,9 +193,75 @@ def get_pc_sampler(sde_x, sde_adj, shape_x, shape_adj, predictor='Euler', correc
         _x = x
         x, x_mean = predictor_obj_x.update_fn(x, adj, flags, vec_t)
         adj, adj_mean = predictor_obj_adj.update_fn(_x, adj, flags, vec_t)
+        x_mid.append(x_mean.detach().clone())
+        adj_mid.append(adj_mean.detach().clone())
       print(' ')
-      return (x_mean if denoise else x), (adj_mean if denoise else adj), diff_steps * (n_steps + 1)
-  return pc_sampler
+      return (x_mean if denoise else x), (adj_mean if denoise else adj), x_mid, adj_mid, diff_steps * (n_steps + 1)
+
+  def pc_sampler_controlled(model_x, model_adj, init_flags, rewardF, sample_M=20):
+
+    score_fn_x = get_score_fn(sde_x, model_x, train=False, continuous=continuous)
+    score_fn_adj = get_score_fn(sde_adj, model_adj, train=False, continuous=continuous)
+
+    predictor_fn = ReverseDiffusionPredictor if predictor=='Reverse' else EulerMaruyamaPredictor
+    corrector_fn = LangevinCorrector if corrector=='Langevin' else NoneCorrector
+
+    predictor_obj_x = predictor_fn('x', sde_x, score_fn_x, probability_flow)
+    corrector_obj_x = corrector_fn('x', sde_x, score_fn_x, snr, scale_eps, n_steps)
+
+    predictor_obj_adj = predictor_fn('adj', sde_adj, score_fn_adj, probability_flow)
+    corrector_obj_adj = corrector_fn('adj', sde_adj, score_fn_adj, snr, scale_eps, n_steps)
+
+    with torch.no_grad():
+      # -------- Initial sample --------
+      x = sde_x.prior_sampling(shape_x).to(device)
+      adj = sde_adj.prior_sampling_sym(shape_adj).to(device)
+      flags = init_flags
+      x = mask_x(x, flags)
+      adj = mask_adjs(adj, flags)
+      diff_steps = sde_adj.N
+      timesteps = torch.linspace(sde_adj.T, eps, diff_steps, device=device)
+
+      # -------- Reverse diffusion process --------
+      for i in trange(0, (diff_steps), desc = '[Sampling]', position = 1, leave=False):
+        t = timesteps[i]
+        vec_t = torch.ones(shape_adj[0], device=t.device) * t
+
+        def x_adj_update_fn(x, adj):
+          _x = x
+          x, x_mean = corrector_obj_x.update_fn(x, adj, flags, vec_t)
+          adj, adj_mean = corrector_obj_adj.update_fn(_x, adj, flags, vec_t)
+
+          _x = x
+          x, x_mean = predictor_obj_x.update_fn(x, adj, flags, vec_t)
+          adj, adj_mean = predictor_obj_adj.update_fn(_x, adj, flags, vec_t)
+          return x_mean, adj_mean, x, adj
+
+        x_list = []
+        adj_list = []
+        scores = []
+        for j in range(sample_M):
+          x_mean_tmp, adj_mean_tmp, x_tmp, adj_tmp = x_adj_update_fn(x.clone(), adj.clone())
+          if i == diff_steps-1:
+            x_list.append(x_mean_tmp.detach().clone())
+            adj_list.append(adj_mean_tmp.detach().clone())
+          else:
+            x_list.append(x_tmp.detach().clone())
+            adj_list.append(adj_tmp.detach().clone())
+          scores.append(rewardF(x_mean_tmp.detach().clone(), adj_mean_tmp.detach().clone()))
+
+        scores = torch.stack(scores, dim=1)
+        scores = torch.softmax(scores, dim=1)
+        # Select the index of the highest score for each batch
+        final_sample_indices = torch.argmax(scores, dim=1).squeeze()  # Shape [batch_size]
+        final_x = [x_list[final_sample_indices[j]][j, :, :] for j in range(final_sample_indices.size(0))]  # Select the chosen samples using gathered indices
+        x = torch.stack(final_x, dim=0)
+        final_adj = [adj_list[final_sample_indices[j]][j, :, :] for j in range(final_sample_indices.size(0))]  # Select the chosen samples using gathered indices
+        adj = torch.stack(final_adj, dim=0)
+
+      print(' ')
+      return x, adj, diff_steps * (n_steps + 1)
+  return pc_sampler_controlled if strat=='controlled' else pc_sampler
 
 
 # -------- S4 solver --------

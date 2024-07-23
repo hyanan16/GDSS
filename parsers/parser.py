@@ -13,8 +13,11 @@ class Parser:
 
         self.parser.add_argument('--config', type=str,
                                     required=True, help="Path of config file")
+        self.parser.add_argument('--reward_name', type=str, default="Reward",
+                                 required=False, help="reward name for plot")
         self.parser.add_argument('--comment', type=str, default="", 
                                     help="A single line comment for the experiment")
+        self.parser.add_argument('--sample_M', type=int, default=20)
         self.parser.add_argument('--seed', type=int, default=42)
         
 

@@ -118,7 +118,7 @@ def load_loss_fn(config):
     return loss_fn
 
 
-def load_sampling_fn(config_train, config_module, config_sample, device):
+def load_sampling_fn(config_train, config_module, config_sample, device, strat='controlled', sample_M=20):
     sde_x = load_sde(config_train.sde.x)
     sde_adj = load_sde(config_train.sde.adj)
     max_node_num  = config_train.data.max_node_num
@@ -131,8 +131,8 @@ def load_sampling_fn(config_train, config_module, config_sample, device):
         get_sampler = get_pc_sampler
 
     if config_train.data.data in ['QM9', 'ZINC250k']:
-        shape_x = (10000, max_node_num, config_train.data.max_feat_num)
-        shape_adj = (10000, max_node_num, max_node_num)
+        shape_x = (100, max_node_num, config_train.data.max_feat_num)
+        shape_adj = (100, max_node_num, max_node_num)
     else:
         shape_x = (config_train.data.batch_size, max_node_num, config_train.data.max_feat_num)
         shape_adj = (config_train.data.batch_size, max_node_num, max_node_num)
@@ -143,7 +143,7 @@ def load_sampling_fn(config_train, config_module, config_sample, device):
                                 n_steps=config_module.n_steps, 
                                 probability_flow=config_sample.probability_flow, 
                                 continuous=True, denoise=config_sample.noise_removal, 
-                                eps=config_sample.eps, device=device_id)
+                                eps=config_sample.eps, device=device_id, strat=strat)
     return sampling_fn
 
 
